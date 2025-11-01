@@ -1,7 +1,7 @@
 ---
 name: github-issue-creator
 description: Interactive GitHub issue creation following structured format standards with brainstorming, validation, and automated creation. Use when creating GitHub issues, filing bugs, documenting features, or when user mentions create issue, new issue, GitHub issue, or issue builder.
-version: 1.0.0
+version: 1.2.0
 dependencies:
   - GitHub CLI (gh command)
 allowed-tools:
@@ -30,31 +30,73 @@ This skill guides users through a 4-phase workflow to create professional, well-
 
 ### Phase 1: Discovery & Brainstorming
 
-Ask the user these questions to gather requirements:
+**First, detect smart defaults:**
 
-1. **Component Type**:
+1. **Detect current repository**:
+   ```bash
+   # Get current repository from git remote or gh CLI
+   gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "amielsaa/match_table_package"
+   ```
+   Store as default repository.
+
+2. **Detect available milestones**:
+   ```bash
+   # Get list of open milestones from the repository
+   gh api repos/{owner}/{repo}/milestones --jq '.[].title'
+   ```
+   Identify the "current" milestone (typically the earliest open milestone or most recently created).
+
+3. **Detect project and iterations**:
+   ```bash
+   # Get organization/user projects
+   gh project list --owner {owner} --format json
+
+   # For match_table_package project, get iteration field options
+   gh project field-list {project_number} --owner {owner} --format json | jq '.[] | select(.name=="Iteration")'
+   ```
+   Default project: "match_table_package" project (detect project number)
+   Get available iteration values from the project's Iteration field.
+
+**Then ask the user these questions:**
+
+1. **Repository Selection**:
+   - Which GitHub repository should this issue be created in?
+   - Default: {detected_repository} (e.g., "amielsaa/match_table_package")
+   - Allow user to specify different repository if needed
+
+2. **Milestone Selection**:
+   - Which milestone/version should this issue be assigned to?
+   - Default: {current_milestone} (e.g., "v1.0.0 - Initial Release")
+   - Show available milestones from the selected repository
+   - Allow user to accept default or choose different milestone
+
+3. **Project Iteration Selection**:
+   - Which iteration/sprint should this issue be added to?
+   - Default project: "match_table_package" project
+   - Show available iterations from the project (e.g., "Iteration 1", "Iteration 2", "Current Sprint")
+   - This determines which kanban column the issue appears in
+   - **REQUIRED**: All issues must be added to a project iteration
+
+4. **Component Type**:
    - Is this a: service | manager | orchestrator | integration | bug | feature | documentation | other?
 
-2. **Brief Description**:
+5. **Brief Description**:
    - What does this component/feature do? (1-2 sentences)
 
-3. **Main Responsibilities** (bullet points):
+6. **Main Responsibilities** (bullet points):
    - What are the key responsibilities or features?
 
-4. **Dependencies**:
+7. **Dependencies**:
    - What other components does this depend on?
    - Provide GitHub issue numbers if available (e.g., #99, #145)
 
-5. **Priority Level**:
+8. **Priority Level**:
    - HIGH | MEDIUM | LOW
 
-6. **Milestone**:
-   - Which milestone/version? (e.g., "v1.0.0 - Initial Release")
-
-7. **File Location**:
+9. **File Location**:
    - Where will this code live? (full path)
 
-8. **Additional Context**:
+10. **Additional Context**:
    - Any architectural patterns to follow?
    - Integration points?
    - Special requirements?
@@ -506,23 +548,60 @@ Once user confirms, execute the following:
 
 2. **Create GitHub Issue**:
    ```bash
-   gh issue create \
-     --repo {repository_url} \
+   # Create issue and capture issue URL
+   issue_url=$(gh issue create \
+     --repo {selected_repository} \
      --title "{issue_title}" \
      --body-file temp_issue_body.md \
      --label "{label1,label2,label3}" \
-     --milestone "{milestone}"
+     --milestone "{selected_milestone}")
+
+   # Extract issue number from URL
+   issue_number=$(echo $issue_url | grep -oP '\d+$')
    ```
 
-3. **Clean Up**:
+   **Use values from Phase 1:**
+   - `{selected_repository}`: Repository chosen by user (or default from detection)
+   - `{selected_milestone}`: Milestone chosen by user (or default from detection)
+   - `{issue_title}`: Generated from component type and name
+   - `{labels}`: Selected/confirmed in Phase 3
+
+3. **Add Issue to Project and Set Iteration**:
+   ```bash
+   # Add issue to project
+   item_id=$(gh project item-add {project_number} \
+     --owner {owner} \
+     --url "${issue_url}" \
+     --format json | jq -r '.id')
+
+   # Set iteration field on the project item
+   gh project item-edit \
+     --id "${item_id}" \
+     --project-id {project_id} \
+     --field-id {iteration_field_id} \
+     --text "{selected_iteration}"
+   ```
+
+   **Use values from Phase 1:**
+   - `{project_number}`: Default "match_table_package" project number
+   - `{owner}`: Repository owner (e.g., "amielsaa")
+   - `{project_id}`: Full project ID (get from project details)
+   - `{iteration_field_id}`: Iteration field ID from project
+   - `{selected_iteration}`: Iteration chosen by user
+
+4. **Clean Up**:
    ```bash
    # Remove temporary file
    rm temp_issue_body.md
    ```
 
-4. **Return Results**:
+5. **Return Results**:
    - Issue URL
    - Issue number
+   - Repository used
+   - Milestone assigned
+   - Project added to
+   - Iteration set
    - Confirmation message
 
 **Example output:**
@@ -530,10 +609,13 @@ Once user confirms, execute the following:
 ✅ Successfully created GitHub issue!
 
 Issue #147: Implement Cross-Component Interaction Service
-URL: https://github.com/user/repo/issues/147
+URL: https://github.com/amielsaa/match_table_package/issues/147
 
-Labels: enhancement, high-priority, data-service
+Repository: amielsaa/match_table_package
 Milestone: v1.0.0 - Initial Release
+Project: match_table_package
+Iteration: Iteration 2
+Labels: enhancement, high-priority, data-service, visualization
 ```
 
 ## Best Practices
